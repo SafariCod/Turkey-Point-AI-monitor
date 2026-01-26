@@ -1,0 +1,158 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Turkey Point Environmental Monitor</title>
+  <link rel="stylesheet" href="/static/css/style.css">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body>
+  <header class="top">
+    <div>
+      <p class="eyebrow">Samsung Solve for Tomorrow ú Community Safety</p>
+      <h1>Turkey Point Environmental Transparency</h1>
+      <p class="lede">Live water/air readings near the nuclear facility with AI anomaly detection for public awareness.</p>
+    </div>
+    <div class="status-card">
+      <p class="label">System Status</p>
+      <div id="statusBadge" class="badge safe">Safe</div>
+      <p id="confidence" class="confidence">Overall abnormal probability: --</p>
+      <p id="lastUpdated" class="timestamp">Last updated: --</p>
+      <div id="stormBadge" class="badge storm" style="display:none;">Storm mode</div>
+    </div>
+  </header>
+
+  <nav class="tabs">
+    <div class="tab-group">
+      <button class="tab active" data-tab="main">Main</button>
+      <button class="tab" data-tab="raw">Raw Sensor Data</button>
+      <button class="tab" data-tab="map">Map</button>
+      <button class="tab" data-tab="info">Info</button>
+    </div>
+    <label class="mode-toggle">
+      <input type="checkbox" id="modeToggle">
+      <span>Advanced mode</span>
+    </label>
+  </nav>
+
+  <main>
+    <section id="tab-main" class="tab-section active">
+      <section class="panel">
+        <div>
+          <h2>Node status</h2>
+          <p class="muted">3 ground nodes + 1 water node ú worst node drives overall status</p>
+          <div class="grid cards" id="nodeCards"></div>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div>
+          <h2>Why this status?</h2>
+          <ul id="reasons"></ul>
+          <p id="humanSummary" class="muted"></p>
+        </div>
+      </section>
+
+      <section class="charts">
+        <h2>Recent Trends</h2>
+        <div class="chart-controls">
+          <label>Ground node
+            <select id="groundNodeSelect">
+              <option value="ground_1">Ground 1</option>
+              <option value="ground_2">Ground 2</option>
+              <option value="ground_3">Ground 3</option>
+            </select>
+          </label>
+          <label>Ground metric
+            <select id="groundMetricSelect"></select>
+          </label>
+          <label>Water metric
+            <select id="waterMetricSelect"></select>
+          </label>
+          <label class="toggle"><input type="checkbox" id="baselineToggle"> Show baseline</label>
+        </div>
+        <div class="chart-grid two">
+          <canvas id="groundChart"></canvas>
+          <canvas id="waterChart"></canvas>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div>
+          <h2>Recent Events</h2>
+          <ul id="eventsList" class="events"></ul>
+        </div>
+      </section>
+    </section>
+
+    <section id="tab-raw" class="tab-section">
+      <section class="panel">
+        <h2>Raw Sensor Data</h2>
+        <p class="muted">Latest reading from each node.</p>
+        <div class="table-wrap">
+          <table id="rawTable">
+            <thead>
+              <tr>
+                <th>Node</th><th>ID</th><th>UTC TS</th><th>Local TS</th><th>Age (s)</th><th>Air Temp (C)</th><th>Humidity (%)</th><th>Pressure (hPa)</th><th>VOC</th><th>PM2.5</th><th>Radiation</th><th>TDS</th><th>pH</th><th>Turbidity</th><th>Water Temp (C)</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </section>
+    </section>
+
+    <section id="tab-map" class="tab-section">
+      <section class="panel">
+        <h2>Map</h2>
+        <p class="muted">Approximate node positions near Turkey Point (placeholder map). Drop image at <code>frontend/assets/turkey_point_map.png</code> to replace.</p>
+        <div class="map-container">
+          <img src="/static/assets/turkey_point_map.png" alt="Map placeholder" class="map-img">
+          <div id="mapMarkers"></div>
+        </div>
+        <div class="legend">
+          <span class="dot safe"></span> Safe
+          <span class="dot warning"></span> Warning
+          <span class="dot danger"></span> Danger
+          <span class="dot offline"></span> Offline
+        </div>
+      </section>
+    </section>
+
+    <section id="tab-info" class="tab-section">
+      <section class="about panel">
+        <div>
+          <h2>Turkey Point Environmental Monitoring Network</h2>
+          <p>Built for Samsung Solve for Tomorrow to deliver transparent, real-time environmental data near the Turkey Point Nuclear Power Plant.</p>
+          <h3>Architecture</h3>
+          <ul>
+            <li>4 distributed ESP32 nodes (ground_1, ground_2, ground_3, water_1)</li>
+            <li>Ground: BME680 (temp/humidity/pressure/gas), SDS011 (PM2.5), future Geiger CPM</li>
+            <li>Water: TDS, pH, turbidity, water temperature</li>
+            <li>Data POSTed to Flask backend (/api/ingest), stored in SQLite, served to this dashboard</li>
+          </ul>
+          <h3>AI layer</h3>
+          <ul>
+            <li>Rolling baseline (median/MAD) + guardrails for hard safety limits</li>
+            <li>Isolation Forest (when trained) for anomaly detection</li>
+            <li>Trend detection + multi-node correlation for regional events</li>
+          </ul>
+          <h3>Impact</h3>
+          <ul>
+            <li>Community transparency and trust</li>
+            <li>Early detection of unusual radiation/air/water events</li>
+            <li>Data-driven awareness for South Florida residents</li>
+          </ul>
+        </div>
+      </section>
+    </section>
+  </main>
+
+  <footer class="muted">
+    <p>Early warning and transparency for the community - Turkey Point ú South Florida</p>
+  </footer>
+
+  <script src="/static/js/main.js"></script>
+</body>
+</html>
