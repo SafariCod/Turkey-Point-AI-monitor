@@ -68,27 +68,30 @@ void connectWiFi() {
 }
 
 void setupTime() {
-  configTime(0, 0, "pool.ntp.org", "time.nist.gov");
-  time_t now = time(nullptr);
-  int retries = 0;
-  while (now < 1700000000 && retries < 30) {
-    delay(500);
-    now = time(nullptr);
-    retries++;
+  configTime(0, 0, "time.google.com", "time.cloudflare.com", "pool.ntp.org");
+}
+
+bool trySyncTime() {
+  setupTime();
+  struct tm timeinfo;
+  unsigned long start = millis();
+  while (millis() - start < 15000) {
+    if (getLocalTime(&timeinfo, 1000)) {
+      time_t now = time(nullptr);
+      if (now >= 1700000000) {
+        Serial.printf("Time synced via NTP, epoch=%ld\n", static_cast<long>(now));
+        return true;
+      }
+    }
   }
-  if (now >= 1700000000) {
-    Serial.printf("Time synced via NTP, epoch=%ld\n", static_cast<long>(now));
-  } else {
-    Serial.println("NTP sync failed; time not set yet");
-  }
+  Serial.println("NTP sync failed; time not set yet");
+  return false;
 }
 
 bool ensureTimeSynced() {
   time_t now = time(nullptr);
   if (now >= 1700000000) return true;
-  setupTime();
-  now = time(nullptr);
-  return now >= 1700000000;
+  return trySyncTime();
 }
 
 void i2cScan() {
@@ -197,14 +200,13 @@ String isoTimestamp() {
 
 bool postReading(float radiation, float pm25, float tempC, float hum, float press, float voc) {
   if (WiFi.status() != WL_CONNECTED) connectWiFi();
-  if (!ensureTimeSynced()) {
-    Serial.println("Time not synced; skipping POST");
-    return false;
-  }
+  bool timeOk = ensureTimeSynced();
 
   StaticJsonDocument<512> doc;
   doc["device_id"] = NODE_ID;
-  doc["timestamp"] = static_cast<long>(time(nullptr));
+  if (timeOk) {
+    doc["timestamp"] = static_cast<long>(time(nullptr));
+  }
   JsonObject data = doc.createNestedObject("data");
   data["radiation_cpm"] = radiation;
   data["pm25"] = pm25;
@@ -224,7 +226,7 @@ bool postReading(float radiation, float pm25, float tempC, float hum, float pres
     if (WiFi.status() != WL_CONNECTED) connectWiFi();
     WiFiClientSecure client;
     client.setTimeout(15000);
-    client.setInsecure(); // DEBUG ONLY
+    client.setInsecure(); // DEBUG ONLY - TODO: pin server cert
     HTTPClient http;
     http.setTimeout(15000);
 

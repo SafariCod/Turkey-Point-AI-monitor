@@ -98,26 +98,49 @@ def telemetry():
         return jsonify({"error": "JSON body required"}), 400
 
     device_id = payload.get("device_id")
-    timestamp = payload.get("timestamp")
+    node_id = payload.get("node_id")
     data = payload.get("data")
+    ts_in = payload.get("timestamp") or payload.get("ts")
 
-    if not isinstance(device_id, str) or not device_id.strip():
-        return jsonify({"error": "device_id must be a non-empty string"}), 400
-    if not isinstance(timestamp, (int, float)):
-        return jsonify({"error": "timestamp must be numeric"}), 400
+    if isinstance(device_id, str) and device_id.strip():
+        node_id = device_id.strip()
+    elif isinstance(node_id, str) and node_id.strip():
+        node_id = node_id.strip()
+    else:
+        return jsonify({"error": "device_id or node_id required"}), 400
+
+    if isinstance(ts_in, (int, float)) and ts_in > 0:
+        server_ts = int(ts_in)
+    else:
+        server_ts = int(datetime.utcnow().timestamp())
+    ts_iso = datetime.utcfromtimestamp(server_ts).replace(microsecond=0).isoformat() + "Z"
+
     if not isinstance(data, dict):
-        return jsonify({"error": "data must be an object"}), 400
+        data = payload
+
+    reading = {
+        "node_id": node_id,
+        "ts": ts_iso,
+        "radiation_cpm": data.get("radiation_cpm"),
+        "pm25": data.get("pm25"),
+        "air_temp_c": data.get("air_temp_c"),
+        "humidity": data.get("humidity"),
+        "pressure_hpa": data.get("pressure_hpa"),
+        "voc": data.get("voc"),
+    }
+    insert_reading(reading)
+    prune_old()
 
     record = {
-        "device_id": device_id.strip(),
-        "timestamp": timestamp,
+        "device_id": node_id,
+        "timestamp": server_ts,
         "data": data,
         "server_received_utc": datetime.utcnow().isoformat() + "Z",
     }
     with open(TELEMETRY_LOG_PATH, "a", encoding="utf-8") as handle:
         handle.write(json.dumps(record) + "\n")
 
-    return jsonify({"ok": True})
+    return jsonify({"ok": True, "node_id": node_id, "ts": ts_iso})
 
 @app.get("/api/recent")
 def recent():
