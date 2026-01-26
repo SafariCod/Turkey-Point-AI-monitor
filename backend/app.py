@@ -142,6 +142,7 @@ def status():
     storm_mode = False
     storm_reason = None
     correlation_reason = None
+    any_data = False
 
     # Preload humidity info for context
     ground_humid_high = False
@@ -168,6 +169,7 @@ def status():
             continue
 
         latest = history[-1]
+        any_data = True
         # Offline detection
         ts = latest.get("ts")
         offline = False
@@ -200,6 +202,15 @@ def status():
         if node_result["status"] in ("Warning", "Danger"):
             insert_event(node_result["status"], node_id, "anomaly", "; ".join(node_result["reasons"][:2]), node_result["abnormal_probability"])
 
+    if not any_data:
+        return jsonify({
+            "ok": True,
+            "status": "NO_DATA_YET",
+            "latest": None,
+            "nodes": nodes,
+            "last_updated_ts": None,
+        })
+
     # Cross-node correlation: regional radiation
     from datetime import datetime, timedelta
     correlation_hit = False
@@ -207,9 +218,11 @@ def status():
     recent_window = now - timedelta(minutes=5)
     high_nodes = []
     for nid, data in nodes.items():
+        data = data or {}
         if not nid.startswith("ground"):
             continue
-        ts = data.get("latest", {}).get("ts")
+        latest = data.get("latest") or {}
+        ts = latest.get("ts")
         if ts:
             try:
                 ts_clean = ts.replace("Z", "+00:00")

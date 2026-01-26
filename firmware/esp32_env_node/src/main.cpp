@@ -1,6 +1,8 @@
 #include <Arduino.h>
 #include <WiFi.h>
 #include <HTTPClient.h>
+#include <WiFiClientSecure.h>
+#include <time.h>
 #include <ArduinoJson.h>
 #include <Adafruit_BME680.h>
 #include <Wire.h>
@@ -66,13 +68,27 @@ void connectWiFi() {
 }
 
 void setupTime() {
-  configTime(GMT_OFFSET_SEC, DAYLIGHT_OFFSET_SEC, NTP_SERVER);
-  struct tm timeinfo;
-  if (getLocalTime(&timeinfo)) {
-    Serial.println("Time synced via NTP");
-  } else {
-    Serial.println("NTP sync failed, will keep trying silently");
+  configTime(0, 0, "pool.ntp.org", "time.nist.gov");
+  time_t now = time(nullptr);
+  int retries = 0;
+  while (now < 1700000000 && retries < 30) {
+    delay(500);
+    now = time(nullptr);
+    retries++;
   }
+  if (now >= 1700000000) {
+    Serial.printf("Time synced via NTP, epoch=%ld\n", static_cast<long>(now));
+  } else {
+    Serial.println("NTP sync failed; time not set yet");
+  }
+}
+
+bool ensureTimeSynced() {
+  time_t now = time(nullptr);
+  if (now >= 1700000000) return true;
+  setupTime();
+  now = time(nullptr);
+  return now >= 1700000000;
 }
 
 void i2cScan() {
@@ -181,41 +197,64 @@ String isoTimestamp() {
 
 bool postReading(float radiation, float pm25, float tempC, float hum, float press, float voc) {
   if (WiFi.status() != WL_CONNECTED) connectWiFi();
-  HTTPClient http;
-  WiFiClient client;
-
-  if (!http.begin(client, SERVER_URL)) {
-    Serial.println("HTTP begin failed");
+  if (!ensureTimeSynced()) {
+    Serial.println("Time not synced; skipping POST");
     return false;
   }
-  http.addHeader("Content-Type", "application/json");
 
   StaticJsonDocument<512> doc;
-  doc["node_id"] = NODE_ID;
-  doc["radiation_cpm"] = radiation;
-  doc["pm25"] = pm25;
-  doc["air_temp_c"] = tempC;
-  doc["humidity"] = hum;
-  doc["pressure_hpa"] = press;
-  doc["voc"] = voc;
-  doc["ts"] = isoTimestamp();
+  doc["device_id"] = NODE_ID;
+  doc["timestamp"] = static_cast<long>(time(nullptr));
+  JsonObject data = doc.createNestedObject("data");
+  data["radiation_cpm"] = radiation;
+  data["pm25"] = pm25;
+  data["air_temp_c"] = tempC;
+  data["humidity"] = hum;
+  data["pressure_hpa"] = press;
+  data["voc"] = voc;
 
   String body;
   serializeJson(doc, body);
   Serial.print("SENDING JSON: ");
   Serial.println(body);
-  int code = http.POST(body);
-  String resp = http.getString();
-  http.end();
 
-  Serial.printf("POST %s -> %d\n", SERVER_URL, code);
-  if (code > 0) {
-    Serial.println(resp);
-    return true;
-  } else {
+  const int maxAttempts = 4;
+  int backoffMs = 1000;
+  for (int attempt = 1; attempt <= maxAttempts; attempt++) {
+    if (WiFi.status() != WL_CONNECTED) connectWiFi();
+    WiFiClientSecure client;
+    client.setTimeout(15000);
+    client.setInsecure(); // DEBUG ONLY
+    HTTPClient http;
+    http.setTimeout(15000);
+
+    if (!http.begin(client, SERVER_URL)) {
+      Serial.println("HTTP begin failed");
+      return false;
+    }
+    http.addHeader("Content-Type", "application/json");
+    http.addHeader("X-API-Key", API_KEY);
+
+    int code = http.POST(body);
+    String resp = http.getString();
+    http.end();
+
+    Serial.printf("POST %s -> %d\n", SERVER_URL, code);
+    if (code >= 200 && code < 300) {
+      Serial.println(resp);
+      return true;
+    } else if (code > 0) {
+      Serial.printf("Server error HTTP %d\n", code);
+      Serial.println(resp);
+      // fall through and retry
+    }
     Serial.printf("HTTP POST failed: %s\n", http.errorToString(code).c_str());
-    return false;
+    if (attempt < maxAttempts) {
+      delay(backoffMs);
+      backoffMs = min(backoffMs * 2, 8000);
+    }
   }
+  return false;
 }
 
 void setup() {
