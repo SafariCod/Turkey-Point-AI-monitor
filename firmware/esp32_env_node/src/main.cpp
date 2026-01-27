@@ -40,6 +40,8 @@ unsigned long geigerWindowStart = 0;
 portMUX_TYPE geigerMux = portMUX_INITIALIZER_UNLOCKED;
 
 void rawSdsDebugWindow();
+bool bootstrapTimeIfNeeded();
+bool trySyncTimeNtp();
 
 void IRAM_ATTR onGeigerPulse() {
   portENTER_CRITICAL_ISR(&geigerMux);
@@ -60,6 +62,12 @@ void connectWiFi() {
   Serial.println();
   if (WiFi.status() == WL_CONNECTED) {
     Serial.printf("WiFi connected. IP: %s\n", WiFi.localIP().toString().c_str());
+    IPAddress dns1(1, 1, 1, 1);
+    IPAddress dns2(8, 8, 8, 8);
+    WiFi.config(INADDR_NONE, INADDR_NONE, INADDR_NONE, dns1, dns2);
+    Serial.println("DNS set to 1.1.1.1 and 8.8.8.8");
+    bootstrapTimeIfNeeded();
+    trySyncTimeNtp();
   } else {
     Serial.println("WiFi connection failed; retrying in 3 seconds");
     delay(3000);
@@ -68,16 +76,56 @@ void connectWiFi() {
 }
 
 void setupTime() {
-  configTime(0, 0, "time.google.com", "time.cloudflare.com", "pool.ntp.org");
+  configTime(0, 0, "pool.ntp.org", "time.nist.gov", "time.google.com");
 }
 
-bool trySyncTime() {
+int monthFromString(const char *mon) {
+  static const char *months[] = {"Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"};
+  for (int i = 0; i < 12; i++) {
+    if (strncmp(mon, months[i], 3) == 0) return i;
+  }
+  return -1;
+}
+
+bool bootstrapTimeIfNeeded() {
+  time_t now = time(nullptr);
+  if (now >= 1700000000) return true;
+
+  char mon[4] = {0};
+  int day = 0;
+  int year = 0;
+  int hour = 0, minute = 0, second = 0;
+  if (sscanf(__DATE__, "%3s %d %d", mon, &day, &year) != 3) return false;
+  if (sscanf(__TIME__, "%d:%d:%d", &hour, &minute, &second) != 3) return false;
+  int month = monthFromString(mon);
+  if (month < 0) return false;
+
+  struct tm tm_time = {};
+  tm_time.tm_year = year - 1900;
+  tm_time.tm_mon = month;
+  tm_time.tm_mday = day;
+  tm_time.tm_hour = hour;
+  tm_time.tm_min = minute;
+  tm_time.tm_sec = second;
+  time_t compileTime = mktime(&tm_time);
+  if (compileTime < 1700000000) return false;
+
+  struct timeval tv;
+  tv.tv_sec = compileTime;
+  tv.tv_usec = 0;
+  settimeofday(&tv, nullptr);
+  Serial.printf("Bootstrap time set from compile time, epoch=%ld\n", static_cast<long>(compileTime));
+  return true;
+}
+
+bool trySyncTimeNtp() {
   setupTime();
   struct tm timeinfo;
   unsigned long start = millis();
-  while (millis() - start < 15000) {
+  while (millis() - start < 10000) {
     if (getLocalTime(&timeinfo, 1000)) {
       time_t now = time(nullptr);
+      Serial.printf("NTP check epoch=%ld\n", static_cast<long>(now));
       if (now >= 1700000000) {
         Serial.printf("Time synced via NTP, epoch=%ld\n", static_cast<long>(now));
         return true;
@@ -91,7 +139,45 @@ bool trySyncTime() {
 bool ensureTimeSynced() {
   time_t now = time(nullptr);
   if (now >= 1700000000) return true;
-  return trySyncTime();
+  if (bootstrapTimeIfNeeded()) return true;
+  return trySyncTimeNtp();
+}
+
+bool checkInternetReachable(IPAddress &resolvedIp) {
+  Serial.println("Resolving host: turkey-point-ai-monitor.onrender.com");
+  if (WiFi.hostByName("turkey-point-ai-monitor.onrender.com", resolvedIp)) {
+    Serial.printf("DNS resolved to %s\n", resolvedIp.toString().c_str());
+  } else {
+    Serial.println("DNS resolution failed");
+    return false;
+  }
+
+  WiFiClient tcp;
+  Serial.println("Checking TCP 443 reachability...");
+  if (!tcp.connect(resolvedIp, 443)) {
+    Serial.println("TCP 443 connection failed");
+    tcp.stop();
+    return false;
+  }
+  tcp.stop();
+  Serial.println("TCP 443 reachable");
+  return true;
+}
+
+bool beginHttps(HTTPClient &http, WiFiClientSecure &client) {
+  const String url = String(SERVER_URL);
+  int schemePos = url.indexOf("://");
+  int hostStart = schemePos >= 0 ? schemePos + 3 : 0;
+  int pathStart = url.indexOf('/', hostStart);
+  String host = pathStart >= 0 ? url.substring(hostStart, pathStart) : url.substring(hostStart);
+  String path = pathStart >= 0 ? url.substring(pathStart) : "/";
+  if (host.length() == 0) {
+    Serial.println("HTTPS begin failed: host empty");
+    return false;
+  }
+  client.setHandshakeTimeout(15000);
+  Serial.printf("HTTPS host=%s path=%s\n", host.c_str(), path.c_str());
+  return http.begin(client, host.c_str(), 443, path.c_str(), true);
 }
 
 void i2cScan() {
@@ -200,13 +286,22 @@ String isoTimestamp() {
 
 bool postReading(float radiation, float pm25, float tempC, float hum, float press, float voc) {
   if (WiFi.status() != WL_CONNECTED) connectWiFi();
+  Serial.printf("WiFi RSSI: %d dBm, free heap: %u\n", WiFi.RSSI(), ESP.getFreeHeap());
+  Serial.printf("Current epoch: %ld\n", static_cast<long>(time(nullptr)));
   bool timeOk = ensureTimeSynced();
+  IPAddress resolvedIp;
+  if (!checkInternetReachable(resolvedIp)) {
+    Serial.println("Internet check failed; skipping POST");
+    return false;
+  }
+  if (!timeOk) {
+    Serial.println("Time not synced; skipping POST");
+    return false;
+  }
 
   StaticJsonDocument<512> doc;
   doc["device_id"] = NODE_ID;
-  if (timeOk) {
-    doc["timestamp"] = static_cast<long>(time(nullptr));
-  }
+  doc["timestamp"] = timeOk ? static_cast<long>(time(nullptr)) : 0;
   JsonObject data = doc.createNestedObject("data");
   data["radiation_cpm"] = radiation;
   data["pm25"] = pm25;
@@ -230,13 +325,14 @@ bool postReading(float radiation, float pm25, float tempC, float hum, float pres
     HTTPClient http;
     http.setTimeout(15000);
 
-    if (!http.begin(client, SERVER_URL)) {
+    if (!beginHttps(http, client)) {
       Serial.println("HTTP begin failed");
       return false;
     }
     http.addHeader("Content-Type", "application/json");
     http.addHeader("X-API-Key", API_KEY);
 
+    Serial.printf("POST attempt %d/%d\n", attempt, maxAttempts);
     int code = http.POST(body);
     String resp = http.getString();
     http.end();
@@ -308,6 +404,7 @@ void loop() {
       bmeRetryAt = millis() + 10000; // retry in 10s
     } else {
       delay(BME_POST_CONFIG_DELAY_MS);
+      
       bmeWarmupUntil = millis();
     }
   }

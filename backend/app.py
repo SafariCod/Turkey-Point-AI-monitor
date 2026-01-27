@@ -4,8 +4,12 @@ from pathlib import Path
 from datetime import datetime
 import json
 import os
+import time
 from db import init_db, insert_reading, get_recent, get_history, prune_old, insert_event, get_events, get_latest
-from ai.predict import predict_node
+from config import load_config
+from security import NonceCache, verify_signature
+from status_engine import StatusEngine
+from ingest_utils import normalize_reading
 
 BASE_DIR = Path(__file__).resolve().parent
 FRONTEND_DIR = BASE_DIR.parent / "frontend"
@@ -14,6 +18,9 @@ STATIC_DIR = FRONTEND_DIR / "static"
 app = Flask(__name__, static_folder=str(STATIC_DIR), static_url_path="/static")
 CORS(app, resources={r"/api/*": {"origins": [r"http://127\\.0\\.0\\.1:\\d+", r"http://localhost:\\d+","http://127.0.0.1","http://localhost"]}})
 init_db()
+APP_CONFIG = load_config()
+NONCE_CACHE = NonceCache(APP_CONFIG.security.nonce_ttl_sec)
+STATUS_ENGINE = StatusEngine(APP_CONFIG)
 
 GROUND_FIELDS = ["radiation_cpm", "pm25", "air_temp_c", "humidity", "pressure_hpa", "voc"]
 WATER_FIELDS = ["tds", "ph", "turbidity", "water_temp_c"]
@@ -31,6 +38,10 @@ TELEMETRY_LOG_PATH = BASE_DIR / "telemetry_log.jsonl"
 @app.get("/api/health")
 def health():
     return jsonify({"ok": True})
+
+@app.get("/api/time")
+def time_endpoint():
+    return jsonify({"epoch": int(time.time())})
 
 @app.post("/api/ingest")
 def ingest():
@@ -61,6 +72,7 @@ def ingest():
                 reading[field] = float(data[field])
     except (TypeError, ValueError):
         return jsonify({"error": "Numeric fields must be numbers"}), 400
+    reading, flags = normalize_reading(node_id, reading, ts_in, list(ALL_FIELDS), APP_CONFIG)
 
     defaulted = [f for f in ALL_FIELDS if data.get(f) is None]
     if defaulted:
@@ -80,10 +92,22 @@ def ingest():
 
     history = get_history(node_id, n=200)
     latest = history[-1] if history else reading
-    result = predict_node(latest, history, node_id)
-    result["latest"] = latest
-    result["inserted_id"] = inserted_id
-    return jsonify(result)
+    node_flags = {node_id: flags}
+    node_features = {node_id: (GROUND_FIELDS if node_id.startswith("ground") else WATER_FIELDS)}
+    STATUS_ENGINE.recompute({node_id: history}, node_features, node_flags)
+    result = STATUS_ENGINE.cache.node_status.get(node_id)
+    payload = {
+        "node_id": node_id,
+        "status": result.status if result else "Safe",
+        "confidence": result.confidence if result else 0.0,
+        "reasons": result.reasons if result else [],
+        "human_summary": result.summary if result else "",
+        "latest": latest,
+        "flags": flags,
+        "computed_at": result.computed_at if result else datetime.utcnow().isoformat() + "Z",
+        "inserted_id": inserted_id,
+    }
+    return jsonify(payload)
 
 @app.post("/api/telemetry")
 def telemetry():
@@ -92,6 +116,11 @@ def telemetry():
         return jsonify({"error": "ESP32_API_KEY not set on server"}), 500
     if request.headers.get("X-API-Key") != expected_key:
         return jsonify({"error": "Unauthorized"}), 401
+
+    body_bytes = request.get_data()
+    sig_result = verify_signature(dict(request.headers), body_bytes, APP_CONFIG.security, NONCE_CACHE)
+    if not sig_result.ok:
+        return jsonify({"error": sig_result.error}), 401
 
     payload = request.get_json(silent=True)
     if not isinstance(payload, dict):
@@ -109,25 +138,18 @@ def telemetry():
     else:
         return jsonify({"error": "device_id or node_id required"}), 400
 
-    if isinstance(ts_in, (int, float)) and ts_in > 0:
+    if sig_result.timestamp:
+        server_ts = int(sig_result.timestamp)
+    elif isinstance(ts_in, (int, float)) and ts_in > 0:
         server_ts = int(ts_in)
     else:
-        server_ts = int(datetime.utcnow().timestamp())
+        server_ts = int(time.time())
     ts_iso = datetime.utcfromtimestamp(server_ts).replace(microsecond=0).isoformat() + "Z"
 
     if not isinstance(data, dict):
         data = payload
 
-    reading = {
-        "node_id": node_id,
-        "ts": ts_iso,
-        "radiation_cpm": data.get("radiation_cpm"),
-        "pm25": data.get("pm25"),
-        "air_temp_c": data.get("air_temp_c"),
-        "humidity": data.get("humidity"),
-        "pressure_hpa": data.get("pressure_hpa"),
-        "voc": data.get("voc"),
-    }
+    reading, flags = normalize_reading(node_id, data, ts_iso, GROUND_FIELDS, APP_CONFIG)
     insert_reading(reading)
     prune_old()
 
@@ -140,7 +162,7 @@ def telemetry():
     with open(TELEMETRY_LOG_PATH, "a", encoding="utf-8") as handle:
         handle.write(json.dumps(record) + "\n")
 
-    return jsonify({"ok": True, "node_id": node_id, "ts": ts_iso})
+    return jsonify({"ok": True, "node_id": node_id, "ts": ts_iso, "flags": flags})
 
 @app.get("/api/recent")
 def recent():
@@ -162,22 +184,15 @@ def recent():
 def status():
     nodes = {}
     latest_ts = None
-    storm_mode = False
-    storm_reason = None
-    correlation_reason = None
     any_data = False
+    now = int(time.time())
 
-    # Preload humidity info for context
-    ground_humid_high = False
-    for node_id in NODE_IDS:
-        if node_id.startswith("ground"):
-            hist = get_history(node_id, n=2)
-            if hist and hist[-1].get("humidity") is not None and hist[-1]["humidity"] >= 90:
-                ground_humid_high = True
-    water_history_for_context = get_history("water_1", n=3)
-
+    node_histories = {}
+    node_flags = {}
+    node_features = {}
     for node_id in NODE_IDS:
         history = get_history(node_id, n=200)
+        node_histories[node_id] = history
         if not history:
             nodes[node_id] = {
                 "node_id": node_id,
@@ -193,37 +208,16 @@ def status():
 
         latest = history[-1]
         any_data = True
-        # Offline detection
-        ts = latest.get("ts")
-        offline = False
-        if ts:
-            try:
-                from datetime import datetime, timezone
-                ts_clean = ts.replace("Z", "+00:00")
-                dt = datetime.fromisoformat(ts_clean)
-                if (datetime.utcnow() - dt.replace(tzinfo=None)).total_seconds() > OFFLINE_SECONDS:
-                    offline = True
-            except Exception:
-                pass
-
-        node_result = predict_node(latest, history, node_id, context={"humidity_high": ground_humid_high, "storm_mode": storm_mode, "storm_reason": storm_reason})
-        node_result["latest"] = latest
-        if offline:
-            node_result["status"] = "Offline"
-            node_result["reasons"].append(f"No data received from {node_id} in last {OFFLINE_SECONDS//60} minutes")
-            node_result["abnormal_probability"] = max(node_result["abnormal_probability"], 0.7)
-            node_result["confidence"] = max(node_result["confidence"], 0.5)
-            node_result["human_summary"] = f"{node_id} is offline; no recent data."
-            insert_event("Warning", node_id, "offline", node_result["reasons"][-1], node_result["abnormal_probability"])
+        node_features[node_id] = GROUND_FIELDS if node_id.startswith("ground") else WATER_FIELDS
+        if node_id in APP_CONFIG.behavior.disable_pm25_nodes:
+            node_features[node_id] = [f for f in node_features[node_id] if f != "pm25"]
+            node_flags[node_id] = {APP_CONFIG.behavior.pm25_flag_name: True}
         else:
-            node_result["human_summary"] = node_result.get("human_summary") or "Status assessed"
+            node_flags[node_id] = {}
 
-        nodes[node_id] = node_result
-        nodes[node_id]["latest"] = latest
         if latest.get("ts"):
             latest_ts = max(latest_ts or latest["ts"], latest["ts"])
-        if node_result["status"] in ("Warning", "Danger"):
-            insert_event(node_result["status"], node_id, "anomaly", "; ".join(node_result["reasons"][:2]), node_result["abnormal_probability"])
+        nodes[node_id]["latest"] = latest
 
     if not any_data:
         return jsonify({
@@ -234,63 +228,58 @@ def status():
             "last_updated_ts": None,
         })
 
-    # Cross-node correlation: regional radiation
-    from datetime import datetime, timedelta
-    correlation_hit = False
-    now = datetime.utcnow()
-    recent_window = now - timedelta(minutes=5)
-    high_nodes = []
-    for nid, data in nodes.items():
-        data = data or {}
-        if not nid.startswith("ground"):
-            continue
-        latest = data.get("latest") or {}
+    if now - STATUS_ENGINE.cache.computed_at_epoch >= APP_CONFIG.status.recompute_interval_sec:
+        STATUS_ENGINE.recompute(node_histories, node_features, node_flags)
+
+    status_cache = STATUS_ENGINE.cache
+    for node_id, history in node_histories.items():
+        if node_id not in status_cache.node_status and history:
+            node_result = STATUS_ENGINE.compute_node(
+                node_id,
+                history[-1],
+                history,
+                node_features.get(node_id, []),
+                node_flags.get(node_id, {}),
+            )
+            status_cache.node_status[node_id] = node_result
+    for node_id, node_result in status_cache.node_status.items():
+        nodes[node_id] = {
+            "node_id": node_id,
+            "status": node_result.status,
+            "abnormal_probability": node_result.confidence,
+            "confidence": node_result.confidence,
+            "reasons": node_result.reasons,
+            "flagged_features": [],
+            "latest": node_result.latest,
+            "human_summary": node_result.summary,
+            "computed_at": node_result.computed_at,
+            "flags": node_result.flags,
+        }
+
+    # Offline detection (no recent data)
+    for node_id, data in nodes.items():
+        latest = (data or {}).get("latest") or {}
         ts = latest.get("ts")
-        if ts:
-            try:
-                ts_clean = ts.replace("Z", "+00:00")
-                dt = datetime.fromisoformat(ts_clean)
-                if dt < recent_window:
-                    continue
-            except Exception:
-                continue
-        if data.get("abnormal_probability", 0) >= 0.7:
-            high_nodes.append(nid)
-    if len(high_nodes) >= 2:
-        correlation_hit = True
-        correlation_reason = f"Regional radiation anomaly across {', '.join(high_nodes)}"
-    elif len(high_nodes) == 1:
-        correlation_reason = f"Localized anomaly near {high_nodes[0]}"
+        if not ts:
+            continue
+        try:
+            ts_clean = ts.replace("Z", "+00:00")
+            dt = datetime.fromisoformat(ts_clean)
+            if (datetime.utcnow() - dt.replace(tzinfo=None)).total_seconds() > OFFLINE_SECONDS:
+                data["status"] = "Offline"
+                data["reasons"] = (data.get("reasons") or []) + [f"No data received from {node_id} in last {OFFLINE_SECONDS//60} minutes"]
+        except Exception:
+            continue
 
-    # Overall = worst abnormal probability
-    overall = max(nodes.values(), key=lambda n: n["abnormal_probability"], default=None)
-    overall_status = overall["status"] if overall else "Safe"
-    overall_prob = overall["abnormal_probability"] if overall else 0.0
-    overall_reasons = []
-    if overall:
-        overall_reasons.extend(overall.get("reasons", []))
-    if correlation_reason:
-        overall_reasons.append(correlation_reason)
-        overall_prob = min(1.0, overall_prob + 0.1)
-        insert_event("Warning", "all", "correlation", correlation_reason, overall_prob)
-    if storm_mode and storm_reason:
-        insert_event("Info", "water_1", "context", f"Storm mode active: {storm_reason}", overall_prob)
-    if storm_mode and storm_reason:
-        overall_reasons.append(f"Context: {storm_reason}")
-    if any(n["status"] == "Offline" for n in nodes.values()):
-        if overall_status == "Safe":
-            overall_status = "Warning"
-        overall_reasons.append("One or more nodes offline")
-
-    overall_human = overall.get("human_summary") if overall else ""
     return jsonify({
-        "overall_status": overall_status,
-        "overall_abnormal_probability": overall_prob,
-        "overall_reasons": overall_reasons,
-        "overall_human_summary": overall_human,
+        "overall_status": status_cache.overall.get("status", "Safe"),
+        "overall_abnormal_probability": status_cache.overall.get("confidence", 0.0),
+        "overall_reasons": status_cache.overall.get("reasons", []),
+        "overall_human_summary": status_cache.overall.get("summary", ""),
         "nodes": nodes,
-        "context": {"storm_mode": storm_mode, "reason": storm_reason} if storm_mode else {"storm_mode": False},
+        "context": {"storm_mode": False},
         "last_updated_ts": latest_ts,
+        "computed_at": status_cache.overall.get("computed_at"),
     })
 
 @app.get("/api/events")

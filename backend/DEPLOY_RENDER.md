@@ -28,8 +28,16 @@ Render will inject `PORT`; gunicorn will bind to it.
 ## 3) Environment variables
 Set in Render → **Environment**:
 - `ESP32_API_KEY` = a strong secret string (required)
+- `TELEMETRY_HMAC_SECRETS` = JSON map of node_id to secret (required for /api/telemetry)
+  - Example: `{"ground_1":"secret1","ground_2":"secret2","ground_3":"secret3"}`
 - Optional:
   - `FLASK_DEBUG=0` (recommended for production)
+  - `DISABLE_PM25_NODES=ground_2` (comma-separated)
+  - `PM25_FALLBACK=1.2`
+  - `STATUS_RECOMPUTE_SEC=30`
+  - `STATUS_HYSTERESIS_SEC=60`
+  - `TELEMETRY_SIG_WINDOW_SEC=300`
+  - `TELEMETRY_NONCE_TTL_SEC=600`
 
 ## 4) Deploy
 1. Click **Create Web Service**.
