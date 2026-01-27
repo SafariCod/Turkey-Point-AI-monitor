@@ -217,6 +217,7 @@ def status():
 
         if latest.get("ts"):
             latest_ts = max(latest_ts or latest["ts"], latest["ts"])
+        nodes[node_id] = nodes.get(node_id, {"node_id": node_id})
         nodes[node_id]["latest"] = latest
 
     if not any_data:

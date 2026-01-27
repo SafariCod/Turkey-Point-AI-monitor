@@ -19,7 +19,7 @@ class NodeBehaviorConfig:
     pm25_fallback: float = 1.2
     pm25_flag_name: str = "pm25_forced_normal"
 
-
+ 
 @dataclass(frozen=True)
 class StatusConfig:
     recompute_interval_sec: int = 30

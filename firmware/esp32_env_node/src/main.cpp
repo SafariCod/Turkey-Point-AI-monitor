@@ -3,6 +3,8 @@
 #include <HTTPClient.h>
 #include <WiFiClientSecure.h>
 #include <time.h>
+#include <esp_system.h>
+#include <mbedtls/md.h>
 #include <ArduinoJson.h>
 #include <Adafruit_BME680.h>
 #include <Wire.h>
@@ -42,6 +44,39 @@ portMUX_TYPE geigerMux = portMUX_INITIALIZER_UNLOCKED;
 void rawSdsDebugWindow();
 bool bootstrapTimeIfNeeded();
 bool trySyncTimeNtp();
+String makeNonce();
+String hmacSha256Hex(const String &message, const char* secret);
+
+String toHex(const uint8_t *data, size_t len) {
+  static const char hexChars[] = "0123456789abcdef";
+  String out;
+  out.reserve(len * 2);
+  for (size_t i = 0; i < len; i++) {
+    out += hexChars[(data[i] >> 4) & 0x0F];
+    out += hexChars[data[i] & 0x0F];
+  }
+  return out;
+}
+
+String makeNonce() {
+  uint8_t buf[8];
+  for (int i = 0; i < 8; i++) {
+    buf[i] = (uint8_t)esp_random();
+  }
+  return toHex(buf, sizeof(buf));
+}
+
+String hmacSha256Hex(const String &message, const char* secret) {
+  uint8_t hmac[32];
+  mbedtls_md_context_t ctx;
+  mbedtls_md_init(&ctx);
+  mbedtls_md_setup(&ctx, mbedtls_md_info_from_type(MBEDTLS_MD_SHA256), 1);
+  mbedtls_md_hmac_starts(&ctx, (const unsigned char*)secret, strlen(secret));
+  mbedtls_md_hmac_update(&ctx, (const unsigned char*)message.c_str(), message.length());
+  mbedtls_md_hmac_finish(&ctx, hmac);
+  mbedtls_md_free(&ctx);
+  return toHex(hmac, sizeof(hmac));
+}
 
 void IRAM_ATTR onGeigerPulse() {
   portENTER_CRITICAL_ISR(&geigerMux);
@@ -331,6 +366,14 @@ bool postReading(float radiation, float pm25, float tempC, float hum, float pres
     }
     http.addHeader("Content-Type", "application/json");
     http.addHeader("X-API-Key", API_KEY);
+    const String nonce = makeNonce();
+    const long ts = static_cast<long>(time(nullptr));
+    const String message = String(NODE_ID) + "." + String(ts) + "." + nonce + "." + body;
+    const String signature = hmacSha256Hex(message, NODE_SECRET);
+    http.addHeader("X-Node-Id", NODE_ID);
+    http.addHeader("X-Timestamp", String(ts));
+    http.addHeader("X-Nonce", nonce);
+    http.addHeader("X-Signature", signature);
 
     Serial.printf("POST attempt %d/%d\n", attempt, maxAttempts);
     int code = http.POST(body);
