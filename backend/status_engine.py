@@ -172,7 +172,9 @@ class StatusEngine:
         self._config = config
         self._cache = StatusCache(node_status={}, overall={}, computed_at_epoch=0)
 
-    def _apply_hysteresis(self, node_id: str, new_status: str, now: int) -> str:
+    def _apply_hysteresis(self, node_id: str, new_status: str, now: int, override: bool) -> str:
+        if override:
+            return new_status
         prev = self._cache.node_status.get(node_id)
         if not prev:
             return new_status
@@ -185,9 +187,10 @@ class StatusEngine:
     def compute_node(self, node_id: str, reading: Dict, history: List[Dict], features: List[str], flags: Dict[str, bool]) -> NodeStatus:
         feats = extract_features(reading, history, features)
         jump_reasons = detect_jumps(history, features)
+        override_hysteresis = bool(jump_reasons) or max((abs(z) for z in feats.z_scores.values()), default=0.0) >= 4.0
         interp = ai_interpretation(feats, jump_reasons)
         now = int(time.time())
-        status = self._apply_hysteresis(node_id, interp.status, now)
+        status = self._apply_hysteresis(node_id, interp.status, now, override_hysteresis)
         computed_at = datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
         return NodeStatus(
             node_id=node_id,
