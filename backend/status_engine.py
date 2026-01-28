@@ -102,7 +102,31 @@ def extract_features(reading: Dict, history: List[Dict], features: List[str]) ->
     return FeatureVector(z_scores=zs, trend_slopes=slopes, abnormal_count=abnormal)
 
 
-def ai_interpretation(features: FeatureVector) -> Interpretation:
+def detect_jumps(history: List[Dict], features: List[str]) -> List[str]:
+    if len(history) < 2:
+        return []
+    prev = history[-2]
+    curr = history[-1]
+    reasons: List[str] = []
+    for feat in features:
+        a = prev.get(feat)
+        b = curr.get(feat)
+        if a is None or b is None:
+            continue
+        try:
+            a_f = float(a)
+            b_f = float(b)
+        except (TypeError, ValueError):
+            continue
+        if a_f <= 0:
+            continue
+        ratio = b_f / a_f
+        if ratio >= 5.0:
+            reasons.append(f"{feat} jump {a_f:.2f} -> {b_f:.2f} ({ratio:.1f}x)")
+    return reasons
+
+
+def ai_interpretation(features: FeatureVector, jump_reasons: List[str] | None = None) -> Interpretation:
     """AI interpretation placeholder; deterministic fallback for now."""
     reasons: List[str] = []
     status = "Safe"
@@ -131,6 +155,12 @@ def ai_interpretation(features: FeatureVector) -> Interpretation:
         if len(reasons) >= 3:
             break
 
+    if jump_reasons:
+        reasons = jump_reasons + reasons
+        status = "ABNORMAL" if status == "Safe" else status
+        confidence = max(confidence, 0.55)
+        summary = "Sudden jump detected"
+
     if not reasons:
         reasons = ["Within expected ranges"]
 
@@ -154,7 +184,8 @@ class StatusEngine:
 
     def compute_node(self, node_id: str, reading: Dict, history: List[Dict], features: List[str], flags: Dict[str, bool]) -> NodeStatus:
         feats = extract_features(reading, history, features)
-        interp = ai_interpretation(feats)
+        jump_reasons = detect_jumps(history, features)
+        interp = ai_interpretation(feats, jump_reasons)
         now = int(time.time())
         status = self._apply_hysteresis(node_id, interp.status, now)
         computed_at = datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
