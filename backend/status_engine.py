@@ -128,16 +128,26 @@ def detect_jumps(history: List[Dict], features: List[str]) -> List[str]:
 
 def ai_interpretation(features: FeatureVector, jump_reasons: List[str] | None = None) -> Interpretation:
     """AI interpretation placeholder; deterministic fallback for now."""
+    benign_low = {"air_temp_c", "pressure_hpa", "humidity"}
+    benign_high = {"air_temp_c", "pressure_hpa", "humidity"}
     reasons: List[str] = []
     status = "Safe"
     confidence = 0.4
     summary = "Within expected ranges"
 
-    z_max = max((abs(z) for z in features.z_scores.values()), default=0.0)
+    z_items = list(features.z_scores.items())
+    z_max = max((abs(z) for _, z in z_items), default=0.0)
+    most_extreme = max(z_items, key=lambda item: abs(item[1]), default=(None, 0.0))
+    extreme_feat, extreme_z = most_extreme
     if z_max >= 4.0:
-        status = "Danger"
-        confidence = 0.8
-        summary = "Major deviation from baseline"
+        if (extreme_feat in benign_low and extreme_z < 0) or (extreme_feat in benign_high and extreme_z > 0):
+            status = "ABNORMAL"
+            confidence = 0.55
+            summary = "Unusual pattern versus baseline"
+        else:
+            status = "Danger"
+            confidence = 0.8
+            summary = "Major deviation from baseline"
     elif z_max >= 3.0:
         status = "Warning"
         confidence = 0.6
