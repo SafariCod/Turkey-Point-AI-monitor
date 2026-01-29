@@ -190,6 +190,9 @@ class StatusEngine:
             return new_status
         if new_status == prev.status:
             return new_status
+        # Allow faster downgrade to avoid lingering danger after spikes
+        if new_status in ("Safe", "ABNORMAL") and prev.status in ("Warning", "Danger"):
+            return new_status
         if now - self._cache.computed_at_epoch < self._config.status.hysteresis_sec:
             return prev.status
         return new_status
