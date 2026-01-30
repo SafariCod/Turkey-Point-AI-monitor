@@ -102,12 +102,13 @@ def extract_features(reading: Dict, history: List[Dict], features: List[str]) ->
     return FeatureVector(z_scores=zs, trend_slopes=slopes, abnormal_count=abnormal)
 
 
-def detect_jumps(history: List[Dict], features: List[str]) -> List[str]:
+def detect_jumps(history: List[Dict], features: List[str]) -> Tuple[List[str], str | None]:
     if len(history) < 2:
-        return []
+        return [], None
     prev = history[-2]
     curr = history[-1]
     reasons: List[str] = []
+    level: str | None = None
     for feat in features:
         a = prev.get(feat)
         b = curr.get(feat)
@@ -123,10 +124,12 @@ def detect_jumps(history: List[Dict], features: List[str]) -> List[str]:
         ratio = b_f / a_f
         if ratio >= 5.0:
             reasons.append(f"{feat} jump {a_f:.2f} -> {b_f:.2f} ({ratio:.1f}x)")
-    return reasons
+            if feat == "radiation_cpm":
+                level = "danger" if ratio >= 10.0 else "warning"
+    return reasons, level
 
 
-def ai_interpretation(features: FeatureVector, jump_reasons: List[str] | None = None) -> Interpretation:
+def ai_interpretation(features: FeatureVector, jump_reasons: List[str] | None = None, jump_level: str | None = None) -> Interpretation:
     """AI interpretation placeholder; deterministic fallback for now."""
     benign_low = {"air_temp_c", "pressure_hpa", "humidity"}
     benign_high = {"air_temp_c", "pressure_hpa", "humidity"}
@@ -167,8 +170,15 @@ def ai_interpretation(features: FeatureVector, jump_reasons: List[str] | None = 
 
     if jump_reasons:
         reasons = jump_reasons + reasons
-        status = "ABNORMAL" if status == "Safe" else status
-        confidence = max(confidence, 0.55)
+        if jump_level == "danger":
+            status = "Danger"
+            confidence = max(confidence, 0.8)
+        elif jump_level == "warning":
+            status = "Warning"
+            confidence = max(confidence, 0.6)
+        else:
+            status = "ABNORMAL" if status == "Safe" else status
+            confidence = max(confidence, 0.55)
         summary = "Sudden jump detected"
 
     if not reasons:
@@ -198,10 +208,12 @@ class StatusEngine:
         return new_status
 
     def compute_node(self, node_id: str, reading: Dict, history: List[Dict], features: List[str], flags: Dict[str, bool]) -> NodeStatus:
+        if flags.get(self._config.behavior.pm25_flag_name):
+            features = [f for f in features if f != "pm25"]
         feats = extract_features(reading, history, features)
-        jump_reasons = detect_jumps(history, features)
+        jump_reasons, jump_level = detect_jumps(history, features)
         override_hysteresis = bool(jump_reasons) or max((abs(z) for z in feats.z_scores.values()), default=0.0) >= 4.0
-        interp = ai_interpretation(feats, jump_reasons)
+        interp = ai_interpretation(feats, jump_reasons, jump_level)
         now = int(time.time())
         status = self._apply_hysteresis(node_id, interp.status, now, override_hysteresis)
         computed_at = datetime.utcnow().replace(microsecond=0).isoformat() + "Z"

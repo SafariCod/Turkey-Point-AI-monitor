@@ -272,6 +272,13 @@ def status():
         except Exception:
             continue
 
+    # Recent events: log non-safe statuses
+    for node_id, data in nodes.items():
+        status = (data or {}).get("status")
+        if status in ("Warning", "Danger", "ABNORMAL", "Offline"):
+            reason = "; ".join((data.get("reasons") or [])[:2])
+            insert_event(status if status != "ABNORMAL" else "Warning", node_id, "anomaly", reason, data.get("confidence", 0.0))
+
     return jsonify({
         "overall_status": status_cache.overall.get("status", "Safe"),
         "overall_abnormal_probability": status_cache.overall.get("confidence", 0.0),
