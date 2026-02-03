@@ -347,12 +347,22 @@ bool postReading(float radiation, float pm25, float tempC, float hum, float pres
   doc["device_id"] = NODE_ID;
   doc["timestamp"] = timeOk ? static_cast<long>(time(nullptr)) : 0;
   JsonObject data = doc.createNestedObject("data");
-  data["radiation_cpm"] = radiation;
-  data["pm25"] = pm25;
-  data["air_temp_c"] = tempC;
-  data["humidity"] = hum;
-  data["pressure_hpa"] = press;
-  data["voc"] = voc;
+  const bool isWaterNode = String(NODE_ID) == "water_1";
+  if (isWaterNode) {
+    data["radiation_cpm"] = nullptr;
+    data["pm25"] = nullptr;
+    data["air_temp_c"] = nullptr;
+    data["humidity"] = nullptr;
+    data["pressure_hpa"] = nullptr;
+    data["voc"] = nullptr;
+  } else {
+    data["radiation_cpm"] = radiation;
+    data["pm25"] = pm25;
+    data["air_temp_c"] = tempC;
+    data["humidity"] = hum;
+    data["pressure_hpa"] = press;
+    data["voc"] = voc;
+  }
   if (waterTempValid) {
     data["water_temp_c"] = lastWaterTempC;
   } else {

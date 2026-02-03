@@ -149,7 +149,8 @@ def telemetry():
     if not isinstance(data, dict):
         data = payload
 
-    reading, flags = normalize_reading(node_id, data, ts_iso, GROUND_FIELDS, APP_CONFIG)
+    fields = GROUND_FIELDS if node_id.startswith("ground") else WATER_FIELDS
+    reading, flags = normalize_reading(node_id, data, ts_iso, fields, APP_CONFIG)
     insert_reading(reading)
     prune_old()
 

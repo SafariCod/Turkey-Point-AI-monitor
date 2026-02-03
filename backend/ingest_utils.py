@@ -16,6 +16,8 @@ def normalize_reading(
     reading: Dict = {"node_id": node_id, "ts": ts_iso}
     for field in fields:
         val = payload.get(field)
+        if val is None and field in ("tds", "ph", "turbidity"):
+            val = payload.get(f"{field}_raw")
         if val is None:
             reading[field] = None
         else:
