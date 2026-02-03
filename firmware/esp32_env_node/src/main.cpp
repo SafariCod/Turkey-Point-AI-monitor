@@ -5,6 +5,8 @@
 #include <time.h>
 #include <esp_system.h>
 #include <mbedtls/md.h>
+#include <OneWire.h>
+#include <DallasTemperature.h>
 #include <ArduinoJson.h>
 #include <Adafruit_BME680.h>
 #include <Wire.h>
@@ -19,6 +21,8 @@ static const uint8_t SDS_TAIL = 0xAB;
 
 HardwareSerial sdsSerial(2); // UART2
 Adafruit_BME680 bme;
+OneWire oneWire(DS18B20_PIN);
+DallasTemperature ds18b20(&oneWire);
 
 float lastPm25 = 12.0f;
 float lastPm10 = 0.0f;
@@ -27,6 +31,11 @@ float lastHum = 55.0f;
 float lastPress = 1010.0f;
 float lastGas = 100000.0f;
 float lastRadiationUsvh = 0.0f;
+float lastWaterTempC = NAN;
+int lastTurbidityRaw = 0;
+int lastTdsRaw = 0;
+int lastPhRaw = 0;
+bool waterTempValid = false;
 unsigned long bmeRetryAt = 0;
 unsigned long bmeWarmupUntil = 0;
 bool bmeReady = false;
@@ -344,6 +353,14 @@ bool postReading(float radiation, float pm25, float tempC, float hum, float pres
   data["humidity"] = hum;
   data["pressure_hpa"] = press;
   data["voc"] = voc;
+  if (waterTempValid) {
+    data["water_temp_c"] = lastWaterTempC;
+  } else {
+    data["water_temp_c"] = nullptr;
+  }
+  data["turbidity_raw"] = lastTurbidityRaw;
+  data["tds_raw"] = lastTdsRaw;
+  data["ph_raw"] = lastPhRaw;
 
   String body;
   serializeJson(doc, body);
@@ -415,6 +432,8 @@ void setup() {
   Wire.begin(I2C_SDA_PIN, I2C_SCL_PIN);
   delay(BME_I2C_STABILIZE_MS); // allow bus/sensors to power up
   i2cScan();
+
+  ds18b20.begin();
 
   pinMode(GEIGER_PIN, GEIGER_USE_PULLUP ? INPUT_PULLUP : INPUT);
   attachInterrupt(digitalPinToInterrupt(GEIGER_PIN), onGeigerPulse, RISING);
@@ -505,6 +524,18 @@ void loop() {
     geigerWindowStart = now;
   }
   float voc = gasToVoc(gas);
+
+  ds18b20.requestTemperatures();
+  float waterTemp = ds18b20.getTempCByIndex(0);
+  if (waterTemp != DEVICE_DISCONNECTED_C) {
+    lastWaterTempC = waterTemp;
+    waterTempValid = true;
+  } else {
+    waterTempValid = false;
+  }
+  lastTurbidityRaw = analogRead(TURBIDITY_PIN);
+  lastTdsRaw = analogRead(TDS_PIN);
+  lastPhRaw = analogRead(PH_PIN);
 
   postReading(radiationUsvh, pm25, tempC, hum, press, voc);
   delay(SEND_INTERVAL_MS);
