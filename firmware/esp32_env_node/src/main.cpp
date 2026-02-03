@@ -424,14 +424,17 @@ void setup() {
   sdsNoFrameHintAt = sdsWarmupUntil + SDS_NO_FRAME_HINT_GRACE_MS;
   geigerWindowStart = bootMs;
 
-  if (BME680_CS_PIN >= 0) {
-    pinMode(BME680_CS_PIN, OUTPUT);
-    digitalWrite(BME680_CS_PIN, HIGH);
-  }
+  const bool isWaterNode = String(NODE_ID) == "water_1";
+  if (!isWaterNode) {
+    if (BME680_CS_PIN >= 0) {
+      pinMode(BME680_CS_PIN, OUTPUT);
+      digitalWrite(BME680_CS_PIN, HIGH);
+    }
 
-  Wire.begin(I2C_SDA_PIN, I2C_SCL_PIN);
-  delay(BME_I2C_STABILIZE_MS); // allow bus/sensors to power up
-  i2cScan();
+    Wire.begin(I2C_SDA_PIN, I2C_SCL_PIN);
+    delay(BME_I2C_STABILIZE_MS); // allow bus/sensors to power up
+    i2cScan();
+  }
 
   ds18b20.begin();
 
@@ -441,24 +444,27 @@ void setup() {
   connectWiFi();
   setupTime();
 
-  sdsSerial.begin(9600, SERIAL_8N1, SDS_RX_PIN, SDS_TX_PIN);
-  sdsSerial.setTimeout(SDS_READ_TIMEOUT_MS);
-  while (sdsSerial.available()) sdsSerial.read(); // flush stale boot garbage
+  if (!isWaterNode) {
+    sdsSerial.begin(9600, SERIAL_8N1, SDS_RX_PIN, SDS_TX_PIN);
+    sdsSerial.setTimeout(SDS_READ_TIMEOUT_MS);
+    while (sdsSerial.available()) sdsSerial.read(); // flush stale boot garbage
 
-  if (!initBME()) {
-    Serial.println("BME680 init failed; continuing without real readings.");
-    bmeRetryAt = millis() + 10000;
-  } else {
-    delay(BME_POST_CONFIG_DELAY_MS); // stabilize before first real reading
-    bmeWarmupUntil = millis();
-    bmeReady = true;
+    if (!initBME()) {
+      Serial.println("BME680 init failed; continuing without real readings.");
+      bmeRetryAt = millis() + 10000;
+    } else {
+      delay(BME_POST_CONFIG_DELAY_MS); // stabilize before first real reading
+      bmeWarmupUntil = millis();
+      bmeReady = true;
+    }
   }
 }
 
 void loop() {
   rawSdsDebugWindow();
 
-  if (!bmeReady && millis() >= bmeRetryAt) {
+  const bool isWaterNode = String(NODE_ID) == "water_1";
+  if (!isWaterNode && !bmeReady && millis() >= bmeRetryAt) {
     Serial.println("Retrying BME680 init...");
     i2cScan();
     bmeReady = initBME();
@@ -472,56 +478,62 @@ void loop() {
   }
 
   float tempC = lastTempC, hum = lastHum, press = lastPress, gas = lastGas;
-  if (bmeReady && millis() >= bmeWarmupUntil && readBME(tempC, hum, press, gas)) {
-    lastTempC = tempC;
-    lastHum = hum;
-    lastPress = press;
-    lastGas = gas;
-  } else if (bmeReady && millis() < bmeWarmupUntil) {
-    Serial.println("BME680 warming up...");
-  } else {
-    Serial.println("Using fallback BME defaults this cycle.");
+  if (!isWaterNode) {
+    if (bmeReady && millis() >= bmeWarmupUntil && readBME(tempC, hum, press, gas)) {
+      lastTempC = tempC;
+      lastHum = hum;
+      lastPress = press;
+      lastGas = gas;
+    } else if (bmeReady && millis() < bmeWarmupUntil) {
+      Serial.println("BME680 warming up...");
+    } else {
+      Serial.println("Using fallback BME defaults this cycle.");
+    }
   }
 
   float pm25 = lastPm25;
   float pm10 = lastPm10;
-  float pmRead25 = 0, pmRead10 = 0;
-  bool sdsWarming = millis() < sdsWarmupUntil;
-  if (readSDS(pmRead25, pmRead10)) {
-    pm25 = pmRead25;
-    pm10 = pmRead10;
-    lastPm25 = pm25;
-    lastPm10 = pm10;
-    sdsLastGoodFrameMs = millis();
-    sdsNoFrameHintAt = millis() + SDS_NO_FRAME_HINT_GRACE_MS;
-    sdsHintShown = false;
-  } else {
-    if (sdsWarming) {
-      Serial.println("SDS011 warming up...");
-    } else if (!sdsHintShown && millis() > sdsNoFrameHintAt) {
-      Serial.println("No valid SDS frames: check 5V power/fan, RX/TX swap, shared GND, or baud");
-      sdsHintShown = true;
-    } else if (!sdsWarming && millis() > sdsWarmupUntil) {
-      Serial.println("SDS011 read failed; reusing last PM2.5 value.");
+  if (!isWaterNode) {
+    float pmRead25 = 0, pmRead10 = 0;
+    bool sdsWarming = millis() < sdsWarmupUntil;
+    if (readSDS(pmRead25, pmRead10)) {
+      pm25 = pmRead25;
+      pm10 = pmRead10;
+      lastPm25 = pm25;
+      lastPm10 = pm10;
+      sdsLastGoodFrameMs = millis();
+      sdsNoFrameHintAt = millis() + SDS_NO_FRAME_HINT_GRACE_MS;
+      sdsHintShown = false;
     } else {
-      // still within grace window; stay quiet
+      if (sdsWarming) {
+        Serial.println("SDS011 warming up...");
+      } else if (!sdsHintShown && millis() > sdsNoFrameHintAt) {
+        Serial.println("No valid SDS frames: check 5V power/fan, RX/TX swap, shared GND, or baud");
+        sdsHintShown = true;
+      } else if (!sdsWarming && millis() > sdsWarmupUntil) {
+        Serial.println("SDS011 read failed; reusing last PM2.5 value.");
+      } else {
+        // still within grace window; stay quiet
+      }
     }
   }
 
   // Geiger CPM -> uSv/h (SEN0463)
   float radiationUsvh = lastRadiationUsvh;
-  unsigned long now = millis();
-  if (now - geigerWindowStart >= GEIGER_WINDOW_MS) {
-    uint32_t pulses = 0;
-    portENTER_CRITICAL(&geigerMux);
-    pulses = geigerPulses;
-    geigerPulses = 0;
-    portEXIT_CRITICAL(&geigerMux);
+  if (!isWaterNode) {
+    unsigned long now = millis();
+    if (now - geigerWindowStart >= GEIGER_WINDOW_MS) {
+      uint32_t pulses = 0;
+      portENTER_CRITICAL(&geigerMux);
+      pulses = geigerPulses;
+      geigerPulses = 0;
+      portEXIT_CRITICAL(&geigerMux);
 
-    float cpm = (pulses * 60000.0f) / GEIGER_WINDOW_MS;
-    radiationUsvh = cpm / GEIGER_CPM_PER_USVH;
-    lastRadiationUsvh = radiationUsvh;
-    geigerWindowStart = now;
+      float cpm = (pulses * 60000.0f) / GEIGER_WINDOW_MS;
+      radiationUsvh = cpm / GEIGER_CPM_PER_USVH;
+      lastRadiationUsvh = radiationUsvh;
+      geigerWindowStart = now;
+    }
   }
   float voc = gasToVoc(gas);
 
