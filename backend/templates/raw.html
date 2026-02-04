@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+{% block content %}
+  <section class="panel">
+    <div class="section-head">
+      <h1>Raw Data</h1>
+      <p class="muted">Filter and export recent readings.</p>
+    </div>
+    <div class="controls">
+      <label>Node
+        <select id="rawNodeSelect">
+          <option value="">All</option>
+          <option value="ground_1">Ground 1</option>
+          <option value="ground_2">Ground 2</option>
+          <option value="ground_3">Ground 3</option>
+          <option value="water_1">Water 1</option>
+        </select>
+      </label>
+      <label>Time Range
+        <select id="rawRangeSelect">
+          <option value="5">Last 5 min</option>
+          <option value="30">Last 30 min</option>
+          <option value="120">Last 2 hr</option>
+          <option value="1440">Last 24 hr</option>
+        </select>
+      </label>
+      <label class="toggle">
+        <input type="checkbox" id="rawAutoRefresh" checked>
+        Auto refresh
+      </label>
+      <button id="rawExportBtn" type="button">Export CSV</button>
+    </div>
+
+    <div class="table-wrap">
+      <table id="rawTable">
+        <thead>
+          <tr id="rawTableHead"></tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </section>
+{% endblock %}
+{% block body_extra %}
+  <script src="/static/js/raw.js"></script>
+{% endblock %}

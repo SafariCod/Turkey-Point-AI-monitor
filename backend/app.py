@@ -1,5 +1,6 @@
 ﻿from flask import Flask, request, jsonify, send_from_directory # type: ignore
 from flask_cors import CORS  # type: ignore
+from flask import render_template  # type: ignore
 from pathlib import Path
 from datetime import datetime
 import json
@@ -273,6 +274,15 @@ def status():
         except Exception:
             continue
 
+    any_online = any((data or {}).get("status") != "Offline" for data in nodes.values())
+    overall_status = status_cache.overall.get("status", "Safe")
+    overall_summary = status_cache.overall.get("summary", "")
+    overall_reasons = status_cache.overall.get("reasons", [])
+    if not any_online:
+        overall_status = "Offline"
+        overall_summary = "No nodes reporting in the last few minutes."
+        overall_reasons = ["All nodes are offline."]
+
     # Recent events: log non-safe statuses
     for node_id, data in nodes.items():
         status = (data or {}).get("status")
@@ -281,10 +291,10 @@ def status():
             insert_event(status if status != "ABNORMAL" else "Warning", node_id, "anomaly", reason, data.get("confidence", 0.0))
 
     return jsonify({
-        "overall_status": status_cache.overall.get("status", "Safe"),
+        "overall_status": overall_status,
         "overall_abnormal_probability": status_cache.overall.get("confidence", 0.0),
-        "overall_reasons": status_cache.overall.get("reasons", []),
-        "overall_human_summary": status_cache.overall.get("summary", ""),
+        "overall_reasons": overall_reasons,
+        "overall_human_summary": overall_summary,
         "nodes": nodes,
         "context": {"storm_mode": False},
         "last_updated_ts": latest_ts,
@@ -322,7 +332,19 @@ def debug_last_ingest():
 
 @app.get("/")
 def index():
-    return send_from_directory(FRONTEND_DIR, "index.html")
+    return render_template("dashboard.html", active_tab="dashboard")
+
+@app.get("/raw")
+def raw():
+    return render_template("raw.html", active_tab="raw")
+
+@app.get("/map")
+def map_view():
+    return render_template("map.html", active_tab="map")
+
+@app.get("/about")
+def about():
+    return render_template("about.html", active_tab="about")
 
 @app.get("/<path:path>")
 def static_proxy(path):

@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+{% block content %}
+  <section class="panel">
+    <div class="section-head">
+      <h1>About</h1>
+    </div>
+    <div class="about-grid">
+      <div>
+        <h2>How this project works</h2>
+        <p>
+          Distributed ESP32 nodes collect air and water data around Turkey Point.
+          Readings are sent to the server over HTTPS and interpreted with a lightweight AI layer
+          to highlight unusual patterns. Data is stored for transparency and trend analysis.
+        </p>
+        <ul>
+          <li>Modular nodes with 3D-printed enclosures</li>
+          <li>Ground sensors: radiation, PM2.5, temperature, humidity, pressure, VOC</li>
+          <li>Water sensors: temperature, turbidity, TDS, pH</li>
+          <li>Server stores readings and computes status updates</li>
+        </ul>
+        <p class="muted">
+          This system does not replace official safety systems. It provides an additional layer
+          of public transparency.
+        </p>
+      </div>
+      <div>
+        <h2>Nuclear energy facts</h2>
+        <ul>
+          <li>Modern plants use multiple redundant safety systems.</li>
+          <li>Containment structures are designed to limit releases.</li>
+          <li>Operations are regulated and monitored by federal agencies.</li>
+          <li>Risk is managed through layered safeguards and inspections.</li>
+        </ul>
+        <h3>Sources (placeholders)</h3>
+        <ul class="muted">
+          <li>U.S. NRC overview</li>
+          <li>IAEA safety standards</li>
+          <li>DOE nuclear energy basics</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+{% endblock %}

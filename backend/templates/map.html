@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% block head_extra %}
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+{% endblock %}
+{% block content %}
+  <section class="panel">
+    <div class="section-head">
+      <h1>Map</h1>
+      <p class="muted">Node locations near Turkey Point (editable coordinates).</p>
+    </div>
+    <div id="map" class="map"></div>
+  </section>
+{% endblock %}
+{% block body_extra %}
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="/static/js/map.js"></script>
+{% endblock %}

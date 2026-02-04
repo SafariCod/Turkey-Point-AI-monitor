@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+{% block head_extra %}
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+{% endblock %}
+{% block content %}
+  <section class="panel">
+    <div class="section-head">
+      <h1>Dashboard</h1>
+      <p class="muted">Live status across ground and water nodes.</p>
+    </div>
+    <div class="node-grid" id="nodeCards"></div>
+  </section>
+
+  <section class="panel">
+    <div class="section-head">
+      <h2>Recent Trends - Ground Nodes</h2>
+    </div>
+    <div class="controls">
+      <label>Node
+        <select id="groundNodeSelect">
+          <option value="ground_1">Ground 1</option>
+          <option value="ground_2">Ground 2</option>
+          <option value="ground_3">Ground 3</option>
+        </select>
+      </label>
+      <label>Metric
+        <select id="groundMetricSelect"></select>
+      </label>
+    </div>
+    <div class="chart-wrap">
+      <canvas id="groundChart"></canvas>
+    </div>
+  </section>
+
+  <section class="panel">
+    <div class="section-head">
+      <h2>Recent Trends - Water Node</h2>
+    </div>
+    <div class="controls">
+      <label>Metric
+        <select id="waterMetricSelect"></select>
+      </label>
+    </div>
+    <div class="chart-wrap">
+      <canvas id="waterChart"></canvas>
+    </div>
+  </section>
+
+  <section class="panel">
+    <div class="section-head">
+      <h2>Recent Events</h2>
+      <p class="muted">Live feed (auto-updates every second).</p>
+    </div>
+    <ul id="eventsList" class="events"></ul>
+  </section>
+{% endblock %}
+{% block body_extra %}
+  <script src="/static/js/dashboard.js"></script>
+{% endblock %}
